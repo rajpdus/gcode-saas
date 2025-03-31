@@ -62,8 +62,8 @@ graph TD
     I --> J(handle_generate: Save Plan to outputs/stepN_output.md);
     I --> K(handle_generate: Call plan_parser.parse_plan);
     K --> L(handle_generate: Iterate Modifications);
-    L -- New File & --apply --> M(handle_generate: Call edit_file tool);
-    L -- Existing File or no --apply --> N(handle_generate: Log Manual Action Needed);
+    L -- "New File & --apply" --> M(handle_generate: Call edit_file tool);
+    L -- "Existing File or no --apply" --> N(handle_generate: Log Manual Action Needed);
     M --> O(handle_generate: Report Results);
     N --> O;
 ```

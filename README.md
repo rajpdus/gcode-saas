@@ -141,8 +141,8 @@ Connect using an MCP-compatible client (e.g., Claude Desktop). The server expose
 
 ## Contributing
 
-(Add contribution guidelines if desired)
+Contributions are welcome! Please see the [CONTRIBUTING.md](CONTRIBUTING.md) file for guidelines on how to report bugs, suggest enhancements, or submit pull requests.
 
 ## License
 
-(Add license information if desired, e.g., MIT License)
+This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
