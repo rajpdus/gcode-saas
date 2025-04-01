@@ -55,8 +55,14 @@ def main():
         formatter_class=argparse.ArgumentDefaultsHelpFormatter
     )
     parser_init.add_argument(
-        "spec_dir",
-        help="Path to the directory containing the specification markdown files."
+        "problem_description",
+        help="High-level description of the problem the SaaS application will solve."
+    )
+    # Optional argument for template directory
+    parser_init.add_argument(
+        "--template-dir",
+        help="Path to the directory containing the specification template files. If not provided, default templates will be used.",
+        default="spec"
     )
 
     # --- 'generate' command ---

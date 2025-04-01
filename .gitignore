@@ -3,6 +3,9 @@ __pycache__/
 *.py[cod]
 *$py.class
 
+# gcode-agent
+.gcode-agent/
+
 # C extensions
 *.so
 
@@ -105,4 +108,6 @@ Dockerfile
 
 # IDEs
 .idea/
-.vscode/
+temp_auto_push.bat
+temp_interactive_push.bat
+.gitignore
