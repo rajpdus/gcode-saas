@@ -9,6 +9,8 @@ It acts as an orchestrator, reading step-by-step specification **templates**, ga
 *   **Spec-Driven Generation:** Reads markdown specification **templates** (`spec/*.md`) to guide application generation for each step.
 *   **Context-Aware & Incremental:** Builds context by using the actual outputs from previous steps when generating the current step. Saves the output of each step.
 *   **Iterative Development:** Generate application components step-by-step based on the spec templates and evolving context.
+*   **Incremental File Generation:** Intelligently generates code in phases - focusing on structure first, then implementation details. Automatically truncates large files and prioritizes essential components.
+*   **Organized Outputs:** Stores all generated files in the `.gcode-agent/outputs/` directory, which can be excluded from git using the provided `.gitignore` entry.
 *   **Gemini Integration:** Uses specified Gemini models (`gemini-1.5-pro`, `gemini-1.5-flash`, etc.) via the `google-generativeai` SDK.
 *   **Plan-Based Execution:** Generates a plan for file modifications based on the current step's template and previous context.
 *   **Tool Use (with `--apply`):** Parses the generated plan and automatically creates *new* files using the `edit_file` tool when the `--apply` flag is used.
@@ -43,27 +45,43 @@ It acts as an orchestrator, reading step-by-step specification **templates**, ga
     Alternatively, you can pass it using the `--api-key` flag with each command, but this is less secure and convenient.
 
 4.  **Prepare Specification Templates:**
-    Ensure you have a directory containing your step-by-step application specification **templates** in Markdown format (e.g., `../spec/step1-problem-definition.md`, `../spec/step2-ia-entities.md`, etc.). These act as guides for each step.
+    The `init` command will generate initial specification files based on your problem description. However, it uses a set of **template** files to guide this generation process. By default, it looks for these templates in a `spec/` directory in your project's root. If this directory exists, ensure it contains your desired base templates (e.g., `step1-problem-definition.md`, `step2-ia-entities.md`, etc.). If it doesn't exist, the agent will use minimal built-in placeholders, which you should then customize. You can also specify a different template directory using the `--template-dir` option during initialization.
 
 ## Usage
 
-Make the main script executable:
+Make the main script executable (if not installed):
 ```bash
-chmod +x gcode_agent.py
+chmod +x gcode_agent.py # Or however you run the agent
 ```
 
 **1. Initialize Project:**
 
-Copies the specification templates into `.gcode-agent/spec`, creates the `.gcode-agent/outputs` directory for storing step results, and creates a configuration file.
+Generates initial specification files tailored to your project's problem description, creates the `.gcode-agent` directory structure (`spec`, `outputs`), and sets up a configuration file.
 
 ```bash
-./gcode_agent.py init <path_to_your_spec_template_directory>
+./gcode_agent.py init "High-level description of the problem your SaaS solves." [--template-dir <path>] [--model <model_name>] [--verbose]
 
-# Example:
-./gcode_agent.py init ../spec --model gemini-1.5-flash-latest
+# Example using default spec/ directory for templates:
+./gcode_agent.py init "A platform for managing community gardening plots and sharing harvest data." --model gemini-1.5-flash-latest
+
+# Example specifying a custom template directory:
+./gcode_agent.py init "An AI-powered tool to summarize academic papers." --template-dir ../my-custom-templates -v
 ```
-*   `<path_to_your_spec_template_directory>`: Required path to the directory containing your `stepX-....md` template files.
-*   `--model`: (Optional) Specify the Gemini model to store in the config during init.
+*   **`"problem_description"`**: **Required.** A quoted string describing the core problem your SaaS application aims to solve. This is used to customize the initial specification files.
+*   `--template-dir <path>`: (Optional) Path to a directory containing the base markdown template files (`stepX-....md`). If not provided or invalid, it defaults to looking for a `spec/` directory in the current working directory. If neither is found, minimal placeholders are used for generation.
+*   `--model <model_name>`: (Optional) Specify the Gemini model to use for generating the initial specs and store it in the config. Defaults to the globally set default model.
+*   `--verbose` or `-v`: Show detailed output during initialization.
+
+The command performs these actions:
+1.  Determines the source directory for templates (user-provided, root `spec/`, or fallback).
+2.  Initializes a Gemini client.
+3.  For each standard step (`step1` to `step6`, plus `agent-plan.md`):
+    *   Reads the corresponding template file from the determined source directory (or uses a minimal placeholder if not found).
+    *   Constructs a prompt asking the LLM to customize the template based on the provided `problem_description`.
+    *   Generates the customized content using the Gemini model.
+    *   Saves the generated content to `.gcode-agent/spec/<step_name>.md`.
+4.  Creates the `.gcode-agent/outputs` directory.
+5.  Creates `.gcode-agent/config.json`, storing the `problem_description`, the path to the template directory used (if any), and the `model`.
 
 **2. Generate Step Plan:**
 
@@ -92,8 +110,12 @@ The command performs these actions:
 5.  Prints the generated plan.
 6.  Saves the plan to `.gcode-agent/outputs/<step_name>_output.md`.
 7.  Parses the plan for file actions.
-8.  If `--apply` is used, attempts to *create* new files via the `edit_file` tool.
-9.  Prints a summary indicating which files were created (if `--apply` used) and which need manual review (modifications or new files without `--apply`).
+8.  If `--apply` is used:
+    - For code files, it implements an incremental approach, focusing on structure over implementation details
+    - Files are sorted by priority (documentation first, then essential code structure)
+    - Large code files are automatically truncated to avoid overwhelming output
+    - All generated files are created in the `.gcode-agent/outputs/` directory
+9.  Prints a summary indicating which files were created (if `--apply` used) and which need manual review, along with guidance for incremental implementation.
 
 **3. Manage Configuration:**
 
@@ -132,11 +154,13 @@ Connect using an MCP-compatible client (e.g., Claude Desktop). The server expose
 
 ## Development Notes
 
-*   **Manual Modification:** Modifications to existing files *always* require manual review and merging, even with `--apply`.
-*   **Context Building:** The agent automatically uses the saved outputs from previous steps as context.
-*   **Prompt Engineering:** The quality of generated plans heavily depends on the prompts in `generate_command.py` and the content of the spec templates and previous outputs.
-*   **Plan Parsing:** The regex in `plan_parser.py` assumes a certain output format from the LLM. It might need adjustments based on observed model outputs.
-*   **Error Handling:** Error handling can be improved, especially for MCP tool calls and file operations.
+*   **Manual Modification:** Modifications to existing files *always* require manual review and merging, even with `--apply`. The generated specs in `.gcode-agent/spec` should also be reviewed and refined after initialization.
+*   **Context Building:** The agent automatically uses the saved outputs from previous steps as context. The initial `problem_description` stored in the config is also used as context during generation steps.
+*   **Incremental Generation:** The system is designed to generate code in phases - focusing first on structure and essential files, then implementation details in subsequent runs. This is particularly beneficial for large applications.
+*   **Output Organization:** All generated files are stored in the `.gcode-agent/outputs/` directory, which is excluded from git tracking via the `.gitignore` entry. Files can be reviewed there before moving to their final locations.
+*   **Prompt Engineering:** The quality of generated plans heavily depends on the prompts in `generate_command.py` and the content of the spec templates and previous outputs. Both the initial plan generation and the subsequent plan parsing rely on effective prompting.
+*   **Plan Parsing:** The system uses a second LLM call to parse the generated plan text and extract file modifications into a JSON format. This is handled within `generate_command.py` and is generally more robust than regex-based approaches.
+*   **Error Handling:** Error handling can be improved, especially for MCP tool calls, file operations, and JSON parsing of LLM outputs.
 *   **Testing:** See the `tests/` directory outline for unit/integration tests (implementation pending).
 
 ## Contributing

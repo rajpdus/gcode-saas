@@ -3,6 +3,9 @@ __pycache__/
 *.py[cod]
 *$py.class
 
+# gcode-agent
+.gcode-agent/
+
 # C extensions
 *.so
 
