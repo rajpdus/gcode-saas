@@ -7,9 +7,9 @@ import sys
 from .core.gemini_client import GeminiClient
 # Import command handlers
 from .commands.init_command import handle_init
-# Add imports for other commands later
 from .commands.generate_command import handle_generate
 from .commands.config_command import handle_config
+from .commands.apply_command import handle_apply_to_workspace # New import
 from .mcp_server import start_server # Import the server start function
 # from .mcp import start_server
 
@@ -122,24 +122,48 @@ def main():
         help="Port to run the MCP server on."
     )
 
+    # --- 'apply-to-workspace' command ---
+    parser_apply = subparsers.add_parser(
+        "apply-to-workspace",
+        help="Copy a file from the agent's output directory to the workspace.",
+        formatter_class=argparse.ArgumentDefaultsHelpFormatter
+    )
+    parser_apply.add_argument(
+        "file_path",
+        help="Path of the file within the '.gcode-agent/outputs/' directory to copy."
+    )
+    parser_apply.add_argument(
+        "--target-path",
+        help="Optional. Path in the workspace to copy the file to. Defaults to the same relative path in the CWD."
+    )
+
     args = parser.parse_args()
 
-    if not args.api_key:
+    # API key is not needed for apply-to-workspace or config list/get
+    if args.command not in ["apply-to-workspace", "config"] and not args.api_key:
         print("Error: Google AI API Key not found. "
               "Please set the GEMINI_API_KEY environment variable or use the --api-key argument.", file=sys.stderr)
         sys.exit(1)
+    elif args.command == "config" and args.config_action == "set" and not args.api_key: # config set still needs key
+        print("Error: Google AI API Key not found for 'config set'. "
+              "Please set the GEMINI_API_KEY environment variable or use the --api-key argument.", file=sys.stderr)
+        sys.exit(1)
 
-    print(f"Welcome to gcode-agent! (Using model: {args.model})")
+
+    print(f"Welcome to gcode-agent! (Using model: {args.model if hasattr(args, 'model') else 'N/A'})")
     print(f"Executing command: {args.command}")
 
     # --- Command Dispatch ---
-    # Instantiate client here if needed by multiple commands, or within specific handlers
     gemini_client = None
-    if args.command in ["generate"]: # Add other commands that need the client
+    if args.command in ["generate", "init"]: # init might also use client for templates in future
+        if not args.api_key: # Check API key specifically for commands that need it
+             print(f"Error: API Key required for command '{args.command}' but not found. "
+                   "Set GEMINI_API_KEY or use --api-key.", file=sys.stderr)
+             sys.exit(1)
         try:
             gemini_client = GeminiClient(
                 api_key=args.api_key,
-                model_name=args.model,
+                model_name=args.model, # model is a global arg, should be fine
                 verbose=args.verbose
             )
         except Exception as e:
@@ -147,53 +171,29 @@ def main():
             sys.exit(1)
 
     if args.command == "init":
-        # Call init command handler function (to be created)
-        # print("Initializing project...")
-        # Example: from .commands.init import handle_init; handle_init(args)
-        # pass
-        if not handle_init(args):
-             sys.exit(1) # Exit if initialization failed
-
+        if not handle_init(args, gemini_client): # Pass client to init
+             sys.exit(1)
     elif args.command == "generate":
-        # Call generate command handler function (to be created)
-        # print(f"Generating step: {args.step or 'default/next'}")
-        if gemini_client:
-            # try:
-            #     # TODO: Replace with actual prompt generation based on spec step
-            #     spec_content = f"This is the content for step: {args.step or 'undefined'}. Please generate the required artifact."
-            #     prompt = f"You are an AI assistant helping build a SaaS application. Based on the following specification step, generate the necessary code or configuration:\n\nSPECIFICATION:\n{spec_content}\n\nGENERATED OUTPUT:"
-
-            #     response = gemini_client.generate_content(prompt)
-            #     print("\n--- Generation Result ---")
-            #     print(response)
-            #     print("-------------------------")
-            # except Exception as e:
-            #     print(f"Error during generation: {e}", file=sys.stderr)
-            #     sys.exit(1)
+        if gemini_client: # Already initialized and checked
             if not handle_generate(args, gemini_client):
-                 sys.exit(1) # Exit if generation failed
+                 sys.exit(1)
         else:
-             print("Error: Gemini client failed to initialize.", file=sys.stderr)
+             # This case should ideally be caught by the check above
+             print("Error: Gemini client required for 'generate' but not initialized.", file=sys.stderr)
              sys.exit(1)
     elif args.command == "config":
-        # Call config command handler function (to be created)
-        # print("Handling configuration...")
-        # Example: from .commands.config import handle_config; handle_config(args)
-        # pass
-        if not handle_config(args):
+        if not handle_config(args): # Config currently doesn't need client
              sys.exit(1)
     elif args.command == "serve-mcp":
-        # Call MCP server start function (to be created)
-        # print(f"Starting MCP server on {args.host}:{args.port}...")
-        # Example: from .mcp import start_server; start_server(args)
-        # pass
         try:
+            # MCP server might eventually need client access depending on its evolution
             start_server(host=args.host, port=args.port)
         except Exception as e:
             print(f"Failed to start MCP server: {e}", file=sys.stderr)
             sys.exit(1)
+    elif args.command == "apply-to-workspace":
+        handle_apply_to_workspace(args) # Doesn't need client
     else:
-        # Should not happen due to argparse 'required=True'
         print(f"Error: Unknown command '{args.command}'", file=sys.stderr)
         sys.exit(1)
 
