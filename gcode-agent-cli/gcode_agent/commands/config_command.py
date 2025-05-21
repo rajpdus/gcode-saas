@@ -9,7 +9,7 @@ CONFIG_PATH = os.path.join(AGENT_DIR, CONFIG_FILE)
 
 # Define allowed keys that can be set (to prevent arbitrary additions)
 # Add more keys as needed (e.g., 'last_completed_step')
-ALLOWED_CONFIG_KEYS = ["model", "current_step"]
+ALLOWED_CONFIG_KEYS = ["model", "current_step", "current_project_step"]
 
 def read_config():
     """Reads the configuration file."""

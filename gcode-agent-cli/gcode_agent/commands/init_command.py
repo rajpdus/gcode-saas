@@ -254,7 +254,8 @@ def handle_init(args):
             "problem_description": problem_description,
             "template_directory": os.path.abspath(effective_template_dir) if effective_template_dir != "." else None,
             "current_step": None, # Track generation progress later
-            "model": model # Store the model used during init
+            "model": model, # Store the model used during init
+            "current_project_step": "step0" # Initialize project step
         }
         if verbose:
             print(f"Creating config file: {config_path}")

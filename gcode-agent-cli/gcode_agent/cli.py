@@ -9,7 +9,8 @@ from .core.gemini_client import GeminiClient
 from .commands.init_command import handle_init
 from .commands.generate_command import handle_generate
 from .commands.config_command import handle_config
-from .commands.apply_command import handle_apply_to_workspace # New import
+from .commands.apply_command import handle_apply_to_workspace
+from .commands.next_step_command import handle_next_step # New import
 from .mcp_server import start_server # Import the server start function
 # from .mcp import start_server
 
@@ -136,12 +137,31 @@ def main():
         "--target-path",
         help="Optional. Path in the workspace to copy the file to. Defaults to the same relative path in the CWD."
     )
+    parser_apply.set_defaults(func=handle_apply_to_workspace)
+
+    # --- 'next' command ---
+    parser_next = subparsers.add_parser(
+        "next",
+        help="Executes the next step in the project generation sequence based on config."
+    )
+    parser_next.add_argument(
+        "--apply",
+        action="store_true",
+        help="Attempt to automatically apply the plan generated for the next step."
+    )
+    # --verbose is global, so next_parser will inherit it.
+    # --model is global, so next_parser will inherit it. handle_next_step can choose to use it or config.
+    parser_next.set_defaults(func=handle_next_step)
+
 
     args = parser.parse_args()
 
-    # API key is not needed for apply-to-workspace or config list/get
-    if args.command not in ["apply-to-workspace", "config"] and not args.api_key:
-        print("Error: Google AI API Key not found. "
+    # Commands that require API key and Gemini Client
+    commands_requiring_client = ["generate", "init", "next"]
+
+    # API key check for relevant commands
+    if args.command in commands_requiring_client and not args.api_key:
+        print(f"Error: Google AI API Key not found for command '{args.command}'. "
               "Please set the GEMINI_API_KEY environment variable or use the --api-key argument.", file=sys.stderr)
         sys.exit(1)
     elif args.command == "config" and args.config_action == "set" and not args.api_key: # config set still needs key
@@ -149,53 +169,50 @@ def main():
               "Please set the GEMINI_API_KEY environment variable or use the --api-key argument.", file=sys.stderr)
         sys.exit(1)
 
-
-    print(f"Welcome to gcode-agent! (Using model: {args.model if hasattr(args, 'model') else 'N/A'})")
+    print(f"Welcome to gcode-agent! (Using model: {args.model if hasattr(args, 'model') and args.model else 'N/A'})")
     print(f"Executing command: {args.command}")
 
-    # --- Command Dispatch ---
+    # --- Client Initialization & Command Dispatch ---
     gemini_client = None
-    if args.command in ["generate", "init"]: # init might also use client for templates in future
-        if not args.api_key: # Check API key specifically for commands that need it
-             print(f"Error: API Key required for command '{args.command}' but not found. "
-                   "Set GEMINI_API_KEY or use --api-key.", file=sys.stderr)
-             sys.exit(1)
+    if args.command in commands_requiring_client:
         try:
             gemini_client = GeminiClient(
                 api_key=args.api_key,
-                model_name=args.model, # model is a global arg, should be fine
+                model_name=args.model,
                 verbose=args.verbose
             )
         except Exception as e:
             print(f"Error initializing Gemini Client: {e}", file=sys.stderr)
             sys.exit(1)
 
-    if args.command == "init":
-        if not handle_init(args, gemini_client): # Pass client to init
-             sys.exit(1)
-    elif args.command == "generate":
-        if gemini_client: # Already initialized and checked
-            if not handle_generate(args, gemini_client):
-                 sys.exit(1)
-        else:
-             # This case should ideally be caught by the check above
-             print("Error: Gemini client required for 'generate' but not initialized.", file=sys.stderr)
-             sys.exit(1)
-    elif args.command == "config":
-        if not handle_config(args): # Config currently doesn't need client
-             sys.exit(1)
-    elif args.command == "serve-mcp":
+    # Dispatch to the appropriate handler function
+    # For commands requiring the client, pass it. Otherwise, just pass args.
+    if hasattr(args, 'func'):
+        exit_code = 0
         try:
-            # MCP server might eventually need client access depending on its evolution
-            start_server(host=args.host, port=args.port)
+            if args.command in commands_requiring_client:
+                if not args.func(args, gemini_client): # Assumes handler returns True for success, False for failure
+                    exit_code = 1
+            else:
+                # For commands like 'config' (except set which is handled by API key check) or 'apply-to-workspace'
+                # Some config actions might return False on failure, so capture that.
+                if hasattr(args, 'config_action') and args.config_action in ["get", "set"]: # list always returns True currently
+                     if not args.func(args):
+                         exit_code = 1
+                else: # For apply-to-workspace or config list
+                    args.func(args) # These don't currently return success/failure bools in a way that's used here
+            
+            if exit_code != 0:
+                 sys.exit(exit_code)
+
         except Exception as e:
-            print(f"Failed to start MCP server: {e}", file=sys.stderr)
+            print(f"An error occurred executing command '{args.command}': {e}", file=sys.stderr)
             sys.exit(1)
-    elif args.command == "apply-to-workspace":
-        handle_apply_to_workspace(args) # Doesn't need client
     else:
-        print(f"Error: Unknown command '{args.command}'", file=sys.stderr)
+        # Fallback for commands not using set_defaults, though all should.
+        print(f"Error: No handler function defined for command '{args.command}'", file=sys.stderr)
         sys.exit(1)
+
 
 if __name__ == "__main__":
     main()

@@ -8,14 +8,15 @@ It acts as an orchestrator, reading step-by-step specification **templates**, ga
 
 *   **Spec-Driven Generation:** Reads markdown specification **templates** (`spec/*.md`) to guide application generation for each step.
 *   **Context-Aware & Incremental:** Builds context by using the actual outputs from previous steps when generating the current step. Saves the output of each step.
+*   **Stateful Step Chaining:** Introduces a `next` command that intelligently executes the subsequent step in the generation sequence (step1 through step6), tracking progress in `config.json` via the `current_project_step` key.
 *   **Iterative Development:** Generate application components step-by-step based on the spec templates and evolving context.
-*   **File Creation and Modification:** When using `generate --apply`, the agent can create new files or **modify existing files** directly within the `.gcode-agent/outputs/` directory based on the generated plan.
-*   **Automated Python Linting:** Automatically runs `flake8` on generated or modified Python files (if `flake8` is installed and available in the system PATH) when using `generate --apply`, and reports findings directly.
+*   **File Creation and Modification:** When using `generate --apply` or `next --apply`, the agent can create new files or **modify existing files** directly within the `.gcode-agent/outputs/` directory based on the generated plan.
+*   **Automated Python Linting:** Automatically runs `flake8` on generated or modified Python files (if `flake8` is installed and available in the system PATH) when using `generate --apply` or `next --apply`, and reports findings directly.
 *   **Selective File Integration:** The `apply-to-workspace` command allows you to selectively copy generated or modified files from the agent's output directory to your main project workspace for integration.
 *   **Organized Outputs:** Stores all generated and modified files in the `.gcode-agent/outputs/` directory, which can be excluded from git using the provided `.gitignore` entry.
 *   **Gemini Integration:** Uses specified Gemini models (`gemini-1.5-pro`, `gemini-1.5-flash`, etc.) via the `google-generativeai` SDK.
 *   **Plan-Based Execution:** Generates a plan for file modifications based on the current step's template and previous context.
-*   **Configuration Management:** View and manage tool configuration (e.g., default model).
+*   **Configuration Management:** View and manage tool configuration (e.g., default model, `current_project_step`).
 *   **MCP Server:** Exposes agent functionality (initialization, generation, config, spec resources) via the Model Context Protocol for integration with compatible clients.
 
 ## Setup
@@ -61,7 +62,7 @@ chmod +x gcode_agent.py # Or however you run the agent
 
 **1. Initialize Project:**
 
-Generates initial specification files tailored to your project's problem description, creates the `.gcode-agent` directory structure (`spec`, `outputs`), and sets up a configuration file.
+Generates initial specification files tailored to your project's problem description, creates the `.gcode-agent` directory structure (`spec`, `outputs`), and sets up a configuration file (`.gcode-agent/config.json`).
 
 ```bash
 ./gcode_agent.py init "High-level description of the problem your SaaS solves." [--template-dir <path>] [--model <model_name>] [--verbose]
@@ -78,19 +79,20 @@ Generates initial specification files tailored to your project's problem descrip
 *   `--verbose` or `-v`: Show detailed output during initialization.
 
 The command performs these actions:
-1.  Determines the source directory for templates (user-provided, root `spec/`, or fallback).
+1.  Determines the source directory for templates.
 2.  Initializes a Gemini client.
-3.  For each standard step (`step1` to `step6`, plus `agent-plan.md`):
-    *   Reads the corresponding template file from the determined source directory (or uses a minimal placeholder if not found).
-    *   Constructs a prompt asking the LLM to customize the template based on the provided `problem_description`.
-    *   Generates the customized content using the Gemini model.
-    *   Saves the generated content to `.gcode-agent/spec/<step_name>.md`.
+3.  Generates customized specification files for each step and saves them to `.gcode-agent/spec/`.
 4.  Creates the `.gcode-agent/outputs` directory.
-5.  Creates `.gcode-agent/config.json`, storing the `problem_description`, the path to the template directory used (if any), and the `model`.
+5.  Creates `.gcode-agent/config.json`, storing:
+    *   `problem_description`
+    *   `template_directory` (path to the templates used)
+    *   `model` (the model used for initialization)
+    *   `current_step` (initially `None`, can be set via `config set`)
+    *   `current_project_step` (initialized to `"step0"` to track overall project progress).
 
-**2. Generate Step Plan & Apply Changes:**
+**2. Generate Specific Step Plan & Apply Changes (Manual Step Control):**
 
-Reads the template for the specified step, reads the outputs from all preceding steps (for context), prompts Gemini to generate a plan, saves the plan as the output for the current step, and optionally attempts to apply the plan within the `.gcode-agent/outputs/` directory.
+If you need to re-run a specific step or work out of sequence, use the `generate` command. It reads the template for the specified step, gathers context, generates a plan, and optionally applies it.
 
 ```bash
 ./gcode_agent.py generate <step_name> [--apply] [--model <model_name>] [--verbose]
@@ -99,53 +101,60 @@ Reads the template for the specified step, reads the outputs from all preceding 
 # Generate step 1 plan (no previous context, saves plan to outputs)
 ./gcode_agent.py generate step1
 
-# Generate step 4 plan, using context from steps 1-3 outputs, save plan,
+# Re-generate step 4 plan, using context from steps 1-3 outputs, save plan,
 # and attempt to create/modify files in .gcode-agent/outputs/
 ./gcode_agent.py generate step4 --apply --model gemini-1.5-pro-latest -v
 ```
 *   `<step_name>`: Required name of the step to generate (e.g., `step1`, `step4`).
-*   `--apply`: (Optional) If included, attempts to automatically create new files or **modify existing files** within the `.gcode-agent/outputs/` directory, as suggested in the plan.
-    *   For Python files (`.py`), if `flake8` is installed and found, it will be run automatically, and linting results will be reported.
+*   `--apply`: (Optional) If included, attempts to automatically create new files or **modify existing files** within the `.gcode-agent/outputs/` directory. Python files are linted with `flake8` if available.
 *   `--model`: (Optional) Override the default/configured Gemini model for this run.
 *   `--verbose` or `-v`: Show detailed output.
 
-The command performs these actions:
-1.  Reads the template for `<step_name>` from `.gcode-agent/spec/`.
-2.  Reads outputs from previous steps (`step1_output.md` to `stepN-1_output.md`) from `.gcode-agent/outputs/`.
-3.  Constructs a prompt containing the previous outputs and the current step template.
-4.  Calls the Gemini model to generate a plan.
-5.  Prints the generated plan.
-6.  Saves the plan to `.gcode-agent/outputs/<step_name>_output.md`.
-7.  Parses the plan for file actions.
-8.  If `--apply` is used:
-    - For code files, it implements an incremental approach, focusing on structure over implementation details.
-    - Files are sorted by priority (documentation first, then essential code structure).
-    - Large code files may be automatically truncated to avoid overwhelming output.
-    - All generated or modified files are written to the `.gcode-agent/outputs/` directory.
-    - If a Python file is written, `flake8` is run (if available), and results are shown.
-9.  Prints a summary indicating which files were created/modified (if `--apply` used) and which need manual review, along with guidance for incremental implementation and linting results.
+**3. Execute Next Step in Sequence (Recommended Workflow):**
 
-**3. Apply File to Workspace:**
+The `next` command is the primary way to advance through the project. It automatically determines and executes the next step based on the `current_project_step` stored in `.gcode-agent/config.json`.
 
-Copies a specific file from the agent's output directory (`.gcode-agent/outputs/`) to your main project workspace. This is typically done after reviewing the generated or modified file.
+```bash
+./gcode_agent.py next [--apply] [--model <model_name>] [--verbose]
+
+# Examples:
+# Assume 'init' has been run (current_project_step is "step0").
+
+# Execute step1 and apply changes
+./gcode_agent.py next --apply
+# Agent identifies next step as "step1", generates plan, applies it.
+# On success, config.json updates to current_project_step: "step1".
+
+# Execute step2 and apply changes
+./gcode_agent.py next --apply
+# Agent identifies next step as "step2", generates plan, applies it.
+# On success, config.json updates to current_project_step: "step2".
+# ...and so on for subsequent steps.
+```
+*   `--apply`: (Optional) If included, attempts to automatically create or modify files in `.gcode-agent/outputs/` for the executed step. Python files are linted.
+*   `--model <model_name>`: (Optional) Override the default or globally configured Gemini model for this specific step execution. The model specified in `config.json` is used by default.
+*   `--verbose` or `-v`: Show detailed output.
+
+Behavior:
+*   Reads `current_project_step` from `.gcode-agent/config.json`.
+*   Determines the next step in the predefined sequence (`step1` through `step6`).
+*   Invokes the generation logic for that step (similar to `gcode-agent generate <next_step_name>`).
+*   If the step completes successfully, it updates `current_project_step` in `config.json` to the step that was just executed.
+
+**4. Apply File to Workspace:**
+
+Copies a specific file from the agent's output directory (`.gcode-agent/outputs/`) to your main project workspace.
 
 ```bash
 ./gcode_agent.py apply-to-workspace <file_path_in_outputs> [--target-path <destination_path_in_project>]
 
-# Examples:
-# Copy a generated Python file to the src/services/ directory of your project
+# Example:
 ./gcode_agent.py apply-to-workspace services/user_service.py --target-path src/services/user_service.py
-
-# Copy a generated README.md to the project root (assuming it was generated in .gcode-agent/outputs/README.md)
-./gcode_agent.py apply-to-workspace README.md
-
-# Copy a file to a specific, absolute path
-./gcode_agent.py apply-to-workspace webapp/static/js/app.js --target-path /var/www/my_project/static/js/app.js
 ```
-*   `<file_path_in_outputs>`: **Required.** The path of the file *within* the `.gcode-agent/outputs/` directory that you want to copy (e.g., `services/user_service.py`, `README.md`).
-*   `--target-path <destination_path_in_project>`: (Optional) The full path (including filename) where the file should be copied in your project. If this path includes directories that do not exist, they will be created. If omitted, the file is copied to the same relative path in your current working directory (project root).
+*   `<file_path_in_outputs>`: **Required.** Path of the file *within* `.gcode-agent/outputs/`.
+*   `--target-path <destination_path_in_project>`: (Optional) Destination path. Defaults to the same relative path in CWD.
 
-**4. Manage Configuration:**
+**5. Manage Configuration:**
 
 View or update settings stored in `.gcode-agent/config.json`.
 
@@ -154,64 +163,78 @@ View or update settings stored in `.gcode-agent/config.json`.
 ./gcode_agent.py config list
 
 # Get a specific setting
-./gcode_agent.py config get model
+./gcode_agent.py config get current_project_step
 
-# Set an allowed setting (currently 'model' or 'current_step')
+# Set an allowed setting (e.g., 'model', 'current_step', 'current_project_step')
 ./gcode_agent.py config set model gemini-1.5-flash-latest
-./gcode_agent.py config set current_step step3
+./gcode_agent.py config set current_project_step step2
 ```
 
-**5. Run as MCP Server:**
+**6. Run as MCP Server:**
 
 Starts an MCP server exposing agent functionality.
 
 ```bash
 ./gcode_agent.py serve-mcp [--host <ip_address>] [--port <port_number>]
-
-# Example:
-./gcode_agent.py serve-mcp --port 8080
 ```
-*   `--host`: (Optional) Host address to bind to (default: `127.0.0.1`).
-*   `--port`: (Optional) Port to listen on (default: `8000`).
-
-Ensure `GEMINI_API_KEY` is set in the environment where the server runs.
-
-Connect using an MCP-compatible client (e.g., Claude Desktop). The server exposes:
-*   **Tools:** `initialize_project`, `generate_step`, `get_config_value`, `set_config_value`.
-*   **Resources:** `spec://<filename>.md` (e.g., `spec://step1-problem-definition.md`).
 
 ## Iterative Development Workflow
 
-The new features facilitate a more refined iterative development workflow:
+The recommended workflow leverages the `next` command for sequential progress:
 
-1.  **Generate & Auto-Apply:** Run `gcode-agent generate <step_name> --apply`.
-    *   This creates new files or modifies existing ones directly within the `.gcode-agent/outputs/` directory.
-    *   For Python files, `flake8` linting results are automatically displayed.
-2.  **Review Outputs:**
-    *   Examine the files in `.gcode-agent/outputs/`.
-    *   Check the console output for linting messages or other warnings.
-3.  **Refine (If Necessary in Outputs):**
-    *   If a file in `.gcode-agent/outputs/` needs further refinement *by the agent itself* (e.g., you want the LLM to try generating it differently):
-        *   Manually edit the corresponding plan file (e.g., `.gcode-agent/outputs/stepN_output.md`). Adjust the plan instructions for the specific file(s) you want the agent to re-process.
-        *   Re-run `gcode-agent generate <step_name> --apply`. The agent will use the modified plan and overwrite the relevant files in the outputs directory.
-4.  **Integrate into Project:**
-    *   Once satisfied with a file in the outputs directory, use the `apply-to-workspace` command to copy it into your main project structure.
+1.  **Initialize Project:**
     ```bash
-    gcode-agent apply-to-workspace path/to/your/file_in_outputs.py --target-path path/to/your/project/file.py
+    ./gcode_agent.py init "Your detailed problem description for the SaaS application."
     ```
-5.  **Manual Integration & Testing:**
+    This sets `current_project_step` to `"step0"` in `.gcode-agent/config.json`.
+
+2.  **Run Next Step:**
+    ```bash
+    ./gcode_agent.py next --apply 
+    ```
+    *   The agent identifies the next step (e.g., "step1" if current is "step0").
+    *   It generates the plan for "step1", applies changes to `.gcode-agent/outputs/`, and runs linters.
+    *   On success, `current_project_step` in `config.json` is updated (e.g., to "step1").
+
+3.  **Review Outputs:**
+    *   Examine the generated/modified files in `.gcode-agent/outputs/`.
+    *   Check the console output for linting messages or other warnings from the agent.
+
+4.  **Refine Current Step (If Necessary):**
+    *   If "step1" (or the most recently completed step) needs further refinement *by the agent itself* (e.g., you want the LLM to try generating a file differently based on adjusted instructions):
+        *   Manually edit the plan file for that step (e.g., `.gcode-agent/outputs/step1_output.md`). Adjust the plan instructions for the specific file(s) you want the agent to re-process.
+        *   Re-run the *specific* step using the `generate` command:
+            ```bash
+            ./gcode_agent.py generate step1 --apply 
+            ```
+        *   The `next` command is for moving *forward* to a new, uncompleted step. The `generate` command is for re-processing a specific step.
+
+5.  **Integrate into Project:**
+    *   Once satisfied with a file in the `.gcode-agent/outputs/` directory, use the `apply-to-workspace` command to copy it into your main project structure:
+    ```bash
+    ./gcode_agent.py apply-to-workspace path/to/your/file_in_outputs.py --target-path path/to/your/project/file.py
+    ```
+
+6.  **Manual Integration & Testing:**
     *   After copying, manually integrate the new/updated code with the rest of your project.
     *   Run your project's tests, add new tests, and ensure everything works as expected.
-6.  **Repeat:** Move to the next generation step or iterate on the current one.
+
+7.  **Proceed to Next Step:**
+    *   When ready to move to the next phase of generation (e.g., from "step1" to "step2"):
+    ```bash
+    ./gcode_agent.py next --apply
+    ```
+    *   The agent will execute "step2", and `current_project_step` will be updated accordingly.
+    *   Repeat steps 3-7 for all subsequent steps in the project.
 
 ## Development Notes
 
 *   **Manual Spec Refinement:** The generated specs in `.gcode-agent/spec` should also be reviewed and refined after the initial `init` command. These specs are crucial for guiding the agent.
 *   **Context Building:** The agent automatically uses the saved outputs from previous steps (the `*_output.md` plan files) as context. The initial `problem_description` stored in the config is also used as context during generation steps.
 *   **Output Organization:** All generated and modified files are first staged in the `.gcode-agent/outputs/` directory. This directory is excluded from git tracking by default.
-*   **Prompt Engineering:** The quality of generated plans heavily depends on the prompts in `generate_command.py` and the content of the spec templates and previous outputs. Both the initial plan generation and the subsequent plan parsing rely on effective prompting.
-*   **Plan Parsing:** The system uses a second LLM call to parse the generated plan text and extract file modifications into a JSON format. This is handled within `generate_command.py`.
-*   **Error Handling:** Error handling can be improved, especially for MCP tool calls, file operations, and JSON parsing of LLM outputs.
+*   **Prompt Engineering:** The quality of generated plans heavily depends on the prompts in `generate_command.py` and the content of the spec templates and previous outputs.
+*   **Plan Parsing:** The system uses an LLM call to parse the generated plan text and extract file modifications into a JSON format.
+*   **Error Handling:** Error handling can be improved.
 *   **Testing:** See the `tests/` directory outline for unit/integration tests (implementation pending).
 
 ## Contributing
